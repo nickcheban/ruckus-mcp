@@ -1,5 +1,8 @@
 # ruckus-mcp
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+
 MCP-сервер для Ruckus Unleashed (протестировано на R500/R600, встроенный веб-сервер Embedthis-Appweb). Использует [`aioruckus`](https://github.com/gabe565/aioruckus) для общения с AJAX-API контроллера.
 
 ## Инструменты
@@ -46,6 +49,7 @@ Systemd-юнит — пример в [`deploy/ruckus-mcp.service`](deploy/ruckus
 - `redirect_uri` в `/oauth/authorize` — allowlist (`claude.ai`, `anthropic.com`, `console.anthropic.com`, `localhost`).
 - **Важно при доработке `get_system_info`**: `aioruckus.get_system_info(SystemStat.ALL)` отдаёт **полный сырой конфиг контроллера**, включая пароль локального админа в открытом виде, TR-069/CWMP-пароли и облачные ключи (AWS SNS, PubNub). `_clean_system_info()` в коде вайтлистит только безопасные поля — если добавляете новые поля в вывод этого инструмента, добавляйте их явно через whitelist, не расширяйте через `**info` или подобное.
 - TLS-верификация к контроллеру отключена (`ssl.CERT_NONE`, `SECLEVEL=0`) — типичные Unleashed-прошивки используют самоподписанные сертификаты со слабым ключом. Это осознанный компромисс для доверенной локальной сети; не направляйте `RUCKUS_HOST` на что-либо за пределами вашего LAN/VPN.
+- **Транспорт наружу**: сам сервер не терминирует TLS — слушает голый HTTP. Если он доступен за пределами localhost/доверенной LAN (а тем более если вы подключаете его как custom-коннектор в claude.ai — там HTTPS обязателен), обязательно ставьте перед ним TLS-терминацию: Cloudflare Tunnel, Tailscale Funnel, nginx/Caddy + Let's Encrypt и т.п. Без этого Bearer-токен (`MCP_SECRET`) в заголовке `Authorization` уходит в сеть открытым текстом. (Это отдельный вопрос от TLS-верификации к самому контроллеру, описанной выше.)
 
 ## Требования
 
