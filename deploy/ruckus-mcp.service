@@ -1,0 +1,14 @@
+[Unit]
+Description=Ruckus Unleashed MCP Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ruckus-mcp
+EnvironmentFile=/opt/ruckus-mcp/.env
+ExecStart=/opt/ruckus-mcp/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8003
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
