@@ -42,6 +42,13 @@ uvicorn server:app --host 0.0.0.0 --port 8003
 
 Systemd unit example: [`deploy/ruckus-mcp.service`](deploy/ruckus-mcp.service).
 
+**Docker:**
+
+```bash
+docker build -t ruckus-mcp .
+docker run -p 8003:8003 --env-file .env ruckus-mcp
+```
+
 ## Security model
 
 - Auth is an `Authorization: Bearer $MCP_SECRET` header on `/mcp`. **Unlike the other servers in this line-up**, the `Authorization` header is always required here — even without `MCP_SECRET` set, you still need to send `Authorization: Bearer ` (empty value). It's recommended to always set `MCP_SECRET`.
