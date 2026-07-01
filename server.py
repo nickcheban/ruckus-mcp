@@ -35,9 +35,9 @@ app = FastAPI()
 # ── Session ───────────────────────────────────────────────────────────────────
 
 async def _make_session():
-    """Ruckus R500/R600 (Embedthis-Appweb 3.4.2) не поддерживает HEAD через aiohttp.
-    Патчим session.head = session.get. SECLEVEL=0 для слабого ключа сертификата
-    (типично для самоподписанных сертификатов на старых прошивках Unleashed)."""
+    """Ruckus R500/R600 (Embedthis-Appweb 3.4.2) don't support HEAD via aiohttp.
+    Patch session.head = session.get. SECLEVEL=0 for weak certificate keys
+    (typical for self-signed certs on older Unleashed firmware)."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -130,11 +130,10 @@ def _clean_event(e):
     return {k: e[k] for k in keys if k in e}
 
 def _clean_system_info(info):
-    """get_system_info(SystemStat.ALL) отдаёт ПОЛНЫЙ сырой конфиг контроллера,
-    включая admin.password в открытом виде, TR-069/CWMP пароли, AWS SNS и
-    PubNub секретные ключи и т.п. Инструмент обещает только сводку по сети —
-    поэтому здесь, как и в остальных _clean_* хелперах, вайтлистим только
-    безопасные поля."""
+    """get_system_info(SystemStat.ALL) returns the controller's ENTIRE raw config,
+    including admin.password in plaintext, TR-069/CWMP passwords, and AWS SNS/
+    PubNub secret keys. The tool only promises a network summary — so, like the
+    other _clean_* helpers, this whitelists only the safe fields."""
     info     = _obj_to_dict(info)
     sysinfo  = info.get("sysinfo", {}) or {}
     identity = info.get("identity", {}) or {}
@@ -154,37 +153,37 @@ def _clean_system_info(info):
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 TOOLS = [
-    # ── Мониторинг ────────────────────────────────────────────────────────────
-    {"name": "get_system_info",     "description": "Общая информация о сети Unleashed: версия прошивки, число AP, режим работы, мастер-AP.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_aps",             "description": "Список всех точек доступа: модель, IP, MAC, статус, uptime, каналы 2.4/5 GHz, клиенты, мощность TX.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_ap_stats",        "description": "Расширенная статистика по AP: трафик rx/tx байт, загрузка канала, клиенты по радио.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_ap_groups",       "description": "Список групп точек доступа и их настройки.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_mesh_info",       "description": "Информация о mesh сети: root AP, member AP, uplink, RSSI backhaul.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_active_clients",  "description": "Список подключённых клиентов: hostname, MAC, IP, SSID, AP, RSSI, VLAN, трафик, uptime.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string", "description": "Фильтр по SSID (опционально)"}, "ap_name": {"type": "string", "description": "Фильтр по имени AP (опционально)"}}, "required": []}},
-    {"name": "get_wlans",           "description": "Список всех SSID/WLAN: имя, статус, безопасность, VLAN.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_wlan_groups",     "description": "Список групп WLAN.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_vap_stats",       "description": "Статистика по VAP (Virtual Access Point): трафик и клиенты по каждому SSID на каждой AP.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_alarms",          "description": "Последние аварии: тип, severity, описание, время (макс 30).", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "Максимум записей (по умолчанию 20, макс 30)", "default": 20}}, "required": []}},
-    {"name": "get_all_events",      "description": "Все события сети: подключения, отключения, ошибки, роуминг.", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "Максимум записей (по умолчанию 50, макс 200)", "default": 50}}, "required": []}},
-    {"name": "get_ap_events",       "description": "События конкретной точки доступа.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "MAC точки доступа"}, "limit": {"type": "integer", "description": "Максимум записей (по умолчанию 30)", "default": 30}}, "required": []}},
-    {"name": "get_wlan_events",     "description": "События конкретного SSID/WLAN.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string", "description": "Имя SSID"}, "limit": {"type": "integer", "description": "Максимум записей (по умолчанию 30)", "default": 30}}, "required": []}},
-    {"name": "get_syslog",          "description": "Системный лог Unleashed.", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "Максимум строк (по умолчанию 50)", "default": 50}}, "required": []}},
-    {"name": "get_rogues",          "description": "Список чужих точек доступа (rogue AP) в эфире.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_blocked_clients", "description": "Список заблокированных клиентов (чёрный список MAC).", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_dpsks",           "description": "Список динамических PSK ключей (DPSK).", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "get_acls",            "description": "Список ACL (Access Control Lists) и их членов.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    {"name": "debug_api_methods",   "description": "Показать все доступные методы aioruckus API.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
-    # ── Управление AP ─────────────────────────────────────────────────────────
-    {"name": "reboot_ap",           "description": "Перезагрузить точку доступа по MAC. Формат: 8c:fe:74:39:c2:e0", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "MAC-адрес AP"}}, "required": ["mac"]}},
-    {"name": "show_ap_leds",        "description": "Включить LED индикаторы на точке доступа по MAC.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "MAC-адрес AP"}}, "required": ["mac"]}},
-    {"name": "hide_ap_leds",        "description": "Выключить LED индикаторы на точке доступа по MAC.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "MAC-адрес AP"}}, "required": ["mac"]}},
-    # ── Управление WLAN ───────────────────────────────────────────────────────
-    {"name": "enable_wlan",         "description": "Включить SSID по имени.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string"}}, "required": ["ssid"]}},
-    {"name": "disable_wlan",        "description": "Выключить SSID по имени (клиенты будут отключены).", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string"}}, "required": ["ssid"]}},
-    {"name": "set_wlan_password",   "description": "Сменить пароль WLAN по имени SSID.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string", "description": "Имя SSID"}, "password": {"type": "string", "description": "Новый пароль (минимум 8 символов)"}}, "required": ["ssid", "password"]}},
-    # ── Управление клиентами ──────────────────────────────────────────────────
-    {"name": "block_client",        "description": "Заблокировать клиента по MAC-адресу.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string"}}, "required": ["mac"]}},
-    {"name": "unblock_client",      "description": "Снять блокировку клиента по MAC-адресу.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string"}}, "required": ["mac"]}},
+    # ── Monitoring ────────────────────────────────────────────────────────────
+    {"name": "get_system_info",     "description": "General info about the Unleashed network: firmware version, AP count, operating mode, master AP.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_aps",             "description": "List of all access points: model, IP, MAC, status, uptime, 2.4/5 GHz channels, clients, TX power.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_ap_stats",        "description": "Extended per-AP stats: rx/tx traffic bytes, channel load, clients per radio.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_ap_groups",       "description": "List of AP groups and their settings.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_mesh_info",       "description": "Mesh network info: root AP, member APs, uplink, backhaul RSSI.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_active_clients",  "description": "List of connected clients: hostname, MAC, IP, SSID, AP, RSSI, VLAN, traffic, uptime.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string", "description": "Filter by SSID (optional)"}, "ap_name": {"type": "string", "description": "Filter by AP name (optional)"}}, "required": []}},
+    {"name": "get_wlans",           "description": "List of all SSIDs/WLANs: name, status, security, VLAN.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_wlan_groups",     "description": "List of WLAN groups.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_vap_stats",       "description": "VAP (Virtual Access Point) stats: traffic and clients per SSID on each AP.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_alarms",          "description": "Recent alarms: type, severity, description, time (max 30).", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "Max entries (default 20, max 30)", "default": 20}}, "required": []}},
+    {"name": "get_all_events",      "description": "All network events: connects, disconnects, errors, roaming.", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "Max entries (default 50, max 200)", "default": 50}}, "required": []}},
+    {"name": "get_ap_events",       "description": "Events for a specific access point.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "AP MAC address"}, "limit": {"type": "integer", "description": "Max entries (default 30)", "default": 30}}, "required": []}},
+    {"name": "get_wlan_events",     "description": "Events for a specific SSID/WLAN.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string", "description": "SSID name"}, "limit": {"type": "integer", "description": "Max entries (default 30)", "default": 30}}, "required": []}},
+    {"name": "get_syslog",          "description": "Unleashed system log.", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "Max lines (default 50)", "default": 50}}, "required": []}},
+    {"name": "get_rogues",          "description": "List of rogue access points detected over the air.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_blocked_clients", "description": "List of blocked clients (MAC blocklist).", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_dpsks",           "description": "List of Dynamic PSK (DPSK) keys.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_acls",            "description": "List of ACLs (Access Control Lists) and their members.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "debug_api_methods",   "description": "Show all available aioruckus API methods.", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    # ── AP management ─────────────────────────────────────────────────────────
+    {"name": "reboot_ap",           "description": "Reboot an access point by MAC. Format: 8c:fe:74:39:c2:e0", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "AP MAC address"}}, "required": ["mac"]}},
+    {"name": "show_ap_leds",        "description": "Turn on LED indicators on an access point by MAC.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "AP MAC address"}}, "required": ["mac"]}},
+    {"name": "hide_ap_leds",        "description": "Turn off LED indicators on an access point by MAC.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string", "description": "AP MAC address"}}, "required": ["mac"]}},
+    # ── WLAN management ───────────────────────────────────────────────────────
+    {"name": "enable_wlan",         "description": "Enable an SSID by name.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string"}}, "required": ["ssid"]}},
+    {"name": "disable_wlan",        "description": "Disable an SSID by name (clients will be disconnected).", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string"}}, "required": ["ssid"]}},
+    {"name": "set_wlan_password",   "description": "Change a WLAN's password by SSID name.", "inputSchema": {"type": "object", "properties": {"ssid": {"type": "string", "description": "SSID name"}, "password": {"type": "string", "description": "New password (min 8 characters)"}}, "required": ["ssid", "password"]}},
+    # ── Client management ─────────────────────────────────────────────────────
+    {"name": "block_client",        "description": "Block a client by MAC address.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string"}}, "required": ["mac"]}},
+    {"name": "unblock_client",      "description": "Unblock a client by MAC address.", "inputSchema": {"type": "object", "properties": {"mac": {"type": "string"}}, "required": ["mac"]}},
 ]
 
 
@@ -197,7 +196,7 @@ async def run_tool(name, args):
                                  auto_cleanup_websession=True) as session:
             api = session.api
 
-            # ── Мониторинг ────────────────────────────────────────────────────
+            # ── Monitoring ────────────────────────────────────────────────────
 
             if name == "get_system_info":
                 return _clean_system_info(await api.get_system_info(SystemStat.ALL))
@@ -340,7 +339,7 @@ async def run_tool(name, args):
             elif name == "debug_api_methods":
                 return {"methods": sorted(x for x in dir(api) if not x.startswith("_"))}
 
-            # ── Управление AP ──────────────────────────────────────────────────
+            # ── AP management ────────────────────────────────────────────────
 
             elif name == "reboot_ap":
                 mac = _normalize_mac(_require(args, "mac"))
@@ -357,7 +356,7 @@ async def run_tool(name, args):
                 await api.do_hide_ap_leds(mac)
                 return {"status": "ok", "action": "hide_ap_leds", "mac": mac}
 
-            # ── Управление WLAN ────────────────────────────────────────────────
+            # ── WLAN management ──────────────────────────────────────────────
 
             elif name == "enable_wlan":
                 ssid = _require(args, "ssid")
@@ -377,7 +376,7 @@ async def run_tool(name, args):
                 await api.do_set_wlan_password(ssid, password)
                 return {"status": "ok", "action": "set_wlan_password", "ssid": ssid}
 
-            # ── Управление клиентами ───────────────────────────────────────────
+            # ── Client management ────────────────────────────────────────────
 
             elif name == "block_client":
                 mac = _normalize_mac(_require(args, "mac"))
