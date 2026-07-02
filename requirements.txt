@@ -4,3 +4,4 @@ aiohttp==3.14.1
 aioruckus==0.42
 python-dotenv==1.2.2
 pydantic==2.13.4
+python-multipart==0.0.32
