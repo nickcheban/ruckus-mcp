@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import re
+import time
 import logging
 import aiohttp
 import ssl
@@ -9,6 +10,7 @@ from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import JSONResponse
 from aioruckus import SystemStat
 from aioruckus.ajaxsession import AjaxSession as _AjaxSession
+from aioruckus.exceptions import AuthenticationError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +35,16 @@ app = FastAPI()
 
 
 # ── Session ───────────────────────────────────────────────────────────────────
+#
+# Every tool call used to open a brand-new AjaxSession (a full HTTPS login
+# round-trip to the AP controller) and log out again at the end. This section
+# instead keeps one long-lived AjaxSession alive across calls, guarded by a
+# lock so requests to the controller are always serialized (AjaxSession isn't
+# designed for concurrent use — CSRF token and login state live on the session
+# object). The session is recreated on an idle timeout or on a real connection
+# failure; aioruckus's AjaxSession.request() already transparently re-logs in
+# if the controller itself ends the session (redirect-to-login on a 302), so
+# this is mainly about avoiding a login on every single call, not correctness.
 
 async def _make_session():
     """Ruckus R500/R600 (Embedthis-Appweb 3.4.2) don't support HEAD via aiohttp.
@@ -51,15 +63,78 @@ async def _make_session():
     return websession
 
 
+_session_lock = asyncio.Lock()
+_session = None
+_websession = None
+_session_last_used = 0.0
+_SESSION_IDLE_LIMIT = 600  # seconds — headroom below the controller's own session idle timeout
+
+
+class _PersistentSessionHandle:
+    """Async context manager that reuses one long-lived AjaxSession instead of
+    logging in and out on every tool call. The lock is held for the whole tool
+    call (not just setup), so requests to the controller are always serialized."""
+
+    async def __aenter__(self):
+        global _session, _websession, _session_last_used
+        await _session_lock.acquire()
+        try:
+            now = time.time()
+            if _session is not None and (now - _session_last_used) > _SESSION_IDLE_LIMIT:
+                await self._close_locked()
+            if _session is None:
+                _websession = await _make_session()
+                _session = _AjaxSession(_websession, RUCKUS_HOST, RUCKUS_USER, RUCKUS_PASS,
+                                         auto_cleanup_websession=False)
+                await _session.__aenter__()  # login
+            _session_last_used = now
+            return _session
+        except Exception:
+            # __aenter__ failed → __aexit__ will NOT be called (that's how the
+            # async with protocol works), so the lock must be released here or
+            # it stays held forever and every subsequent tool call hangs.
+            await self._close_locked()
+            _session_lock.release()
+            raise
+
+    async def __aexit__(self, exc_type, exc, tb):
+        # Connection-level failure (network/timeout/stale auth) — drop the
+        # session so the next call reconnects from scratch. Application-level
+        # errors (ValueError etc. from the tool functions themselves) don't
+        # touch the session — it's still perfectly usable.
+        if exc_type is not None and issubclass(exc_type, (ConnectionError, OSError, asyncio.TimeoutError, AuthenticationError)):
+            await self._close_locked()
+        _session_lock.release()
+        return False  # don't suppress the exception
+
+    @staticmethod
+    async def _close_locked():
+        global _session, _websession
+        if _session is not None:
+            try:
+                await _session.close()
+            except Exception:
+                pass
+        if _websession is not None:
+            try:
+                await _websession.close()
+            except Exception:
+                pass
+        _session = None
+        _websession = None
+
+
+def get_session():
+    return _PersistentSessionHandle()
+
+
 # ── Startup self-test ─────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup():
     logger.info("Ruckus MCP starting → %s", RUCKUS_HOST)
     try:
-        websession = await _make_session()
-        async with _AjaxSession(websession, RUCKUS_HOST, RUCKUS_USER, RUCKUS_PASS,
-                                 auto_cleanup_websession=True) as session:
+        async with get_session() as session:
             info = await session.api.get_system_info()
             logger.info("Ruckus login OK: %s", list(info.keys()) if isinstance(info, dict) else "ok")
     except Exception as e:
@@ -91,22 +166,36 @@ def _require(args, key):
         raise ValueError(f"'{key}' is required")
     return args[key]
 
-def _clean_ap(ap):
+def _clean_ap(ap, stat=None):
+    """`api.get_aps()` only returns identity fields (its 'name' is literally the
+    MAC, not a friendly name) — status/uptime/clients/channels/firmware live in
+    `api.get_ap_stats()` instead, under differently-named keys. Merge both here
+    rather than relying on get_aps() alone (that was the bug: every dynamic
+    field came back null).
+    NOTE: 'status' is inferred from stat['state'] == '1' (observed on healthy
+    APs) — unverified against a genuinely down AP, treat as best-effort.
+    'uptime_seconds_raw' is passed through unconverted: the raw value looked
+    too large for plain seconds against the AP's own reboot counters, so the
+    unit needs empirical confirmation before trusting it."""
     ap = _obj_to_dict(ap)
+    stat = _obj_to_dict(stat) if stat else {}
+    radios = stat.get("radio") if isinstance(stat.get("radio"), list) else []
+    state = stat.get("state")
     return {
-        "name":       ap.get("name"),
-        "mac":        ap.get("mac"),
-        "ip":         ap.get("ip"),
-        "model":      ap.get("model"),
-        "serial":     ap.get("serial"),
-        "status":     ap.get("status"),
-        "uptime":     ap.get("uptime"),
-        "clients":    ap.get("clients"),
-        "channel-24": ap.get("channel-24") or ap.get("channel24") or ap.get("channel24g"),
-        "channel-5":  ap.get("channel-5")  or ap.get("channel5")  or ap.get("channel5g"),
-        "tx-power":   ap.get("tx-power")   or ap.get("txpower"),
-        "firmware":   ap.get("firmware"),
-        "description":ap.get("description"),
+        "name":               stat.get("ap-name") or ap.get("name"),
+        "mac":                ap.get("mac") or stat.get("mac"),
+        "ip":                 ap.get("ip") or stat.get("ip"),
+        "model":              ap.get("model") or stat.get("model"),
+        "serial":             ap.get("serial") or stat.get("serial-number"),
+        "status":             ({"1": "up"}.get(state, f"unknown (state={state})") if state is not None else None),
+        "uptime_seconds_raw": stat.get("uptime"),
+        "clients":            stat.get("num-sta") or stat.get("assoc-stas"),
+        "channel-24":         stat.get("channel-11ng"),
+        "channel-5":          stat.get("channel-11na"),
+        "tx-power-24":        radios[0].get("tx-power") if len(radios) > 0 else None,
+        "tx-power-5":         radios[1].get("tx-power") if len(radios) > 1 else None,
+        "firmware":           stat.get("firmware-version") or ap.get("firmware"),
+        "description":        ap.get("description"),
     }
 
 def _clean_client(c):
@@ -191,9 +280,7 @@ TOOLS = [
 
 async def run_tool(name, args):
     async def _run():
-        websession = await _make_session()
-        async with _AjaxSession(websession, RUCKUS_HOST, RUCKUS_USER, RUCKUS_PASS,
-                                 auto_cleanup_websession=True) as session:
+        async with get_session() as session:
             api = session.api
 
             # ── Monitoring ────────────────────────────────────────────────────
@@ -202,7 +289,18 @@ async def run_tool(name, args):
                 return _clean_system_info(await api.get_system_info(SystemStat.ALL))
 
             elif name == "get_aps":
-                return [_clean_ap(ap) for ap in await api.get_aps()]
+                aps = await api.get_aps()
+                stats = await api.get_ap_stats()
+                stats_by_mac = {}
+                for s in stats:
+                    s = _obj_to_dict(s)
+                    mac = (s.get("mac") or "").lower()
+                    if mac:
+                        stats_by_mac[mac] = s
+                return [
+                    _clean_ap(ap, stats_by_mac.get((_obj_to_dict(ap).get("mac") or "").lower()))
+                    for ap in aps
+                ]
 
             elif name == "get_ap_stats":
                 stats = await api.get_ap_stats()
@@ -421,12 +519,12 @@ def validate_redirect_uri(uri: str):
 
 @app.get("/")
 async def root():
-    return {"status": "ruckus-mcp running", "version": "2.0.0", "host": RUCKUS_HOST}
+    return {"status": "ruckus-mcp running", "version": "2.1.0", "host": RUCKUS_HOST}
 
 @app.get("/mcp")
 async def mcp_info(request: Request):
     check_auth(request)
-    return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "ruckus-mcp", "version": "2.0.0"}}
+    return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "ruckus-mcp", "version": "2.1.0"}}
 
 @app.post("/mcp")
 async def mcp_handler(request: Request):
@@ -443,7 +541,7 @@ async def mcp_handler(request: Request):
         return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "ruckus-mcp", "version": "2.0.0"}
+            "serverInfo": {"name": "ruckus-mcp", "version": "2.1.0"}
         }})
 
     elif method == "notifications/initialized":
