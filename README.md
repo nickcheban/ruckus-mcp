@@ -52,10 +52,10 @@ docker run -p 8003:8003 --env-file .env ruckus-mcp
 Published images are available from GitHub Container Registry:
 
 ```bash
-docker run -p 8003:8003 --env-file .env ghcr.io/brunnels/ruckus-mcp:master
+docker run -p 8003:8003 --env-file .env ghcr.io/<owner>/<repository>:master
 ```
 
-The GitHub Actions workflow builds pull requests and publishes images for pushes to `master` and released tags.
+Replace `<owner>/<repository>` with the GitHub repository path (for example, `brunnels/ruckus-mcp`). The GitHub Actions workflow publishes images to the matching `ghcr.io/<owner>/<repository>` path for pushes to `master` and released tags.
 
 ## Security model
 
