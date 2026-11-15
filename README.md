@@ -49,6 +49,14 @@ docker build -t ruckus-mcp .
 docker run -p 8003:8003 --env-file .env ruckus-mcp
 ```
 
+Published images are available from GitHub Container Registry:
+
+```bash
+docker run -p 8003:8003 --env-file .env ghcr.io/nickcheban/ruckus-mcp:master
+```
+
+The GitHub Actions workflow builds pull requests and publishes images for pushes to `master` and released tags.
+
 ## Security model
 
 - Auth is an `Authorization: Bearer $MCP_SECRET` header on `/mcp`. **Unlike the other servers in this line-up**, the `Authorization` header is always required here — even without `MCP_SECRET` set, you still need to send `Authorization: Bearer ` (empty value). It's recommended to always set `MCP_SECRET`.
